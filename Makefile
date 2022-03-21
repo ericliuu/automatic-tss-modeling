@@ -54,4 +54,4 @@ GenerateTiledBenchmarks: GenerateTiledBenchmarks.lo
 # 	./GenerateTiledBenchmarks testCode.C
 
 clean:
-	rm AutoTile AutoTile.lo GenerateTiledBenchmarks GenerateTiledBenchmarks.lo
+	rm AutoTile AutoTile.lo GenerateTiledBenchmarks GenerateTiledBenchmarks.lo sandbox/*
