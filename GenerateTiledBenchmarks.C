@@ -32,6 +32,12 @@ int findNumberOfEnclosingLoops(SgNode* node) {
   return numLoops;
 }
 
+int findNumberOfEnclosedLoops(SgNode* node) {
+  Rose_STL_Container<SgNode*> loops = NodeQuery::querySubTree(
+      node, V_SgForStatement);
+  return loops.size();
+}
+
 void generateTiledProg(int argc, char *argv[], string fileName,
                        string funcName, SgName loopName, int counter) {
 
@@ -46,7 +52,7 @@ void generateTiledProg(int argc, char *argv[], string fileName,
   SgFunctionDefinition *defn = func->get_definition();
   ROSE_ASSERT(defn);
   Rose_STL_Container<SgNode*> loops = NodeQuery::querySubTree(
-      defn,V_SgForStatement);
+      defn, V_SgForStatement);
 
   // Find the target loop and tile it
   for (Rose_STL_Container<SgNode*>::iterator iter = loops.begin();
@@ -129,7 +135,8 @@ int main(int argc, char *argv[]) {
 
         // Skip imperfectly nested loops and loops that are only singley nested
         if (SageInterface::isCanonicalForLoop(fl)
-            && findNumberOfEnclosingLoops(fl) > 1) {
+            && (findNumberOfEnclosingLoops(fl) > 1
+            ||  findNumberOfEnclosedLoops(fl->get_loop_body()) > 0)) {
           generateTiledProg(argc, argv, fileName, func->get_name().getString(),
                             fl->get_mangled_name(), testcaseNum);
           testcaseNum++;

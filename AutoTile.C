@@ -11,6 +11,40 @@
 
 using namespace std;
 
+// Performs a bottom up search of the AST, finding all enclosing
+// analyzable loops of the given node
+void findEnclosingLoops(
+  SgNode* node,
+  vector<SgForStatement*> &loops,
+  set<SgForStatement*> &analyzableLoops
+) {
+  ROSE_ASSERT(node);
+
+  SgStatement* refStmt = SageInterface::getEnclosingStatement(node);
+  ROSE_ASSERT(refStmt);
+  SgForStatement* fl = isSgForStatement(
+    SageInterface::findEnclosingLoop(refStmt)
+  );
+
+  while (fl) {
+    if (analyzableLoops.find(fl) == analyzableLoops.end())
+      continue;
+    loops.push_back(fl);
+    refStmt = SageInterface::getEnclosingStatement(fl->get_parent());
+    ROSE_ASSERT(refStmt);
+    fl = isSgForStatement(SageInterface::findEnclosingLoop(refStmt));
+  }
+}
+
+void collectLoopRefInfo(SgForStatement* forLoop) {
+
+  vector<SgForStatement*> loops;
+//  findEnclosingLoops(forLoop, loops);
+
+
+
+}
+
 int main(int argc, char *argv[]) {
 
   // Build a project
@@ -65,10 +99,9 @@ int main(int argc, char *argv[]) {
         cout << "\t\t Found a for-loop to tile at: ";
         cout << fl->get_file_info()->get_line() << endl;
 
-        // Skip imperfectly nested loops and loops that are only singley nested
+        // Skip imperfectly nested loops
         if (SageInterface::isCanonicalForLoop(fl)) {
-          //generateTiledProg(argc, argv, fileName, func->get_name().getString(),
-          //                  fl->get_mangled_name(), testcaseNum);
+          collectLoopRefInfo(fl);
           testcaseNum++;
         } else {
           cout << "\t\t\t Skipped single non-nested loop" << endl;
