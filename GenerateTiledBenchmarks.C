@@ -11,8 +11,7 @@ int findNumberOfEnclosingLoops(SgNode* node) {
   SgStatement* refStmt = SageInterface::getEnclosingStatement(node);
   ROSE_ASSERT(refStmt);
   SgForStatement* fl = isSgForStatement(
-    SageInterface::findEnclosingLoop(refStmt)
-  );
+      SageInterface::findEnclosingLoop(refStmt));
 
   while (fl) {
     numLoops++;
@@ -31,30 +30,6 @@ int findNumberOfEnclosedLoops(SgNode* node) {
 }
 
 /*
- * Performs a bottom up search of the AST, finding all enclosing
- * analyzable loops of the given node
- */
-void findEnclosingLoops(
-  SgNode* node,
-  vector<SgForStatement*> &loops
-) {
-  ROSE_ASSERT(node);
-
-  SgStatement* refStmt = SageInterface::getEnclosingStatement(node);
-  ROSE_ASSERT(refStmt);
-  SgForStatement* fl = isSgForStatement(
-    SageInterface::findEnclosingLoop(refStmt)
-  );
-
-  while (fl) {
-    loops.push_back(fl);
-    refStmt = SageInterface::getEnclosingStatement(fl->get_parent());
-    ROSE_ASSERT(refStmt);
-    fl = isSgForStatement(SageInterface::findEnclosingLoop(refStmt));
-  }
-}
-
-/*
  * Get all read and write array references contained in the scope of node
  */
 void getAllArrayRefs(
@@ -70,16 +45,16 @@ void getAllArrayRefs(
   SageInterface::collectReadWriteRefs(loopScope, readRefs, writeRefs);
 
   // get all array reads
-  for (int i = 0; i < readRefs.size(); i++) {
-    SgPntrArrRefExp* readArrRef = isSgPntrArrRefExp(readRefs[i]);
+  for (SgNode *read : readRefs){
+    SgPntrArrRefExp* readArrRef = isSgPntrArrRefExp(read);
     if (!readArrRef)
       continue;
     arrReadRefs.push_back(readArrRef);
   }
 
   // get all array writes
-  for (int i = 0; i < writeRefs.size(); i++) {
-    SgPntrArrRefExp* writeArrRef = isSgPntrArrRefExp(writeRefs[i]);
+  for (SgNode *write : writeRefs) {
+    SgPntrArrRefExp* writeArrRef = isSgPntrArrRefExp(write);
     if (!writeArrRef)
       continue;
     arrWriteRefs.push_back(writeArrRef);
@@ -109,16 +84,14 @@ SgForStatement* filterRefsNotInDominatingLoop(
     SgStatement* refStmt = SageInterface::getEnclosingStatement(cur);
     ROSE_ASSERT(refStmt);
     SgForStatement* fl = isSgForStatement(
-      SageInterface::findEnclosingLoop(refStmt)
-    );
+        SageInterface::findEnclosingLoop(refStmt));
     loopCounts[fl]++;
   }
   for (SgNode* cur : arrWriteRefs) {
     SgStatement* refStmt = SageInterface::getEnclosingStatement(cur);
     ROSE_ASSERT(refStmt);
     SgForStatement* fl = isSgForStatement(
-      SageInterface::findEnclosingLoop(refStmt)
-    );
+        SageInterface::findEnclosingLoop(refStmt));
     loopCounts[fl]++;
   }
 
@@ -137,8 +110,7 @@ SgForStatement* filterRefsNotInDominatingLoop(
     SgStatement* refStmt = SageInterface::getEnclosingStatement(cur);
     ROSE_ASSERT(refStmt);
     SgForStatement* fl = isSgForStatement(
-      SageInterface::findEnclosingLoop(refStmt)
-    );
+        SageInterface::findEnclosingLoop(refStmt));
     if (fl == dominatingLoop) {
       filteredReadRefs.push_back(cur);
     }
@@ -147,14 +119,39 @@ SgForStatement* filterRefsNotInDominatingLoop(
     SgStatement* refStmt = SageInterface::getEnclosingStatement(cur);
     ROSE_ASSERT(refStmt);
     SgForStatement* fl = isSgForStatement(
-      SageInterface::findEnclosingLoop(refStmt)
-    );
+        SageInterface::findEnclosingLoop(refStmt));
     if (fl == dominatingLoop) {
       filteredWriteRefs.push_back(cur);
     }
   }
   return dominatingLoop;
 }
+
+/*
+ * Calculates the number of for loops separating an ancestor and descendant
+ * for statement. 1 if there are the same loop
+ */
+int loopDistance(SgForStatement* ancestor, SgForStatement* descendant) {
+  ROSE_ASSERT(SageInterface::isAncestor(ancestor, descendant->get_loop_body()));
+
+  SgStatement* stmt = SageInterface::getEnclosingStatement(
+      descendant);
+  ROSE_ASSERT(stmt);
+  SgForStatement* fl = isSgForStatement(SageInterface::findEnclosingLoop(stmt));
+  int dist = 0;
+
+  while (fl) {
+    dist++;
+    if (fl == ancestor)
+      break;
+    stmt = SageInterface::getEnclosingStatement(fl->get_parent());
+    ROSE_ASSERT(stmt);
+    fl = isSgForStatement(SageInterface::findEnclosingLoop(stmt));
+  }
+
+  return dist;
+}
+
 
 /*
  * Collects features according the Yuki et al.'s implementation, however
@@ -195,10 +192,45 @@ void collectLoopRefAndDist(
       arrReadRefs, arrWriteRefs, filteredReadRefs, filteredWriteRefs);
   ROSE_ASSERT(dominatingLoop);
 
-  for (SgNode* read : filteredReadRefs) {
-    
-  }
+  SgInitializedName* dominatingLoopIdx = SageInterface::getLoopIndexVariable(
+      dominatingLoop);
 
+  // Collect features
+  for (SgNode* read : filteredReadRefs) {
+    SgExpression* ref = isSgExpression(read);
+    ROSE_ASSERT(ref);
+    SgExpression* nameExp = NULL;
+    vector<SgExpression*> *subscripts = new vector<SgExpression*>;
+    ROSE_ASSERT(SageInterface::isArrayReference(ref, &nameExp, &subscripts));
+
+    // We only consider 2D data
+    // TODO: Should 3+ dimensional data be filtered?
+    if (subscripts->size() != 2)
+      continue;
+
+    SgInitializedName* rowIdxName = SageInterface::convertRefToInitializedName(
+        (*subscripts)[0]);
+    SgInitializedName* colIdxName = SageInterface::convertRefToInitializedName(
+        (*subscripts)[1]);
+
+    // if columns of 2D data are indexed with dominating loop index,
+    // then the reference is prefetched
+    if (colIdxName == dominatingLoopIdx) {
+      refFeatures["readPrefetched"]++;
+    }
+
+    // if rows and not columns are indexed with dominating loop index,
+    // then the reference is non-prefetched
+    else if (rowIdxName == dominatingLoopIdx) {
+      refFeatures["readNonPrefetched"]++;
+    }
+
+    // otherwise we have an invariant index
+    else {
+      refFeatures["readInvariant"]++;
+    }
+  }
+  refFeatures["distToDominatingLoop"] = loopDistance(forLoop, dominatingLoop);
 }
 
 void generateTiledProg(int argc, char *argv[], string fileName,
@@ -297,11 +329,6 @@ int main(int argc, char *argv[]) {
         Sg_File_Info* flInfo = fl->get_file_info();
         cout << "\t\t Found a for-loop to tile at: ";
         cout << flInfo->get_line() << endl;
-
-        // TODO: remove
-        cout << "\t\t\t canoncial: " << SageInterface::isCanonicalForLoop(fl) << endl;
-        cout << "\t\t\t numecnlsing" << findNumberOfEnclosingLoops(fl) <<endl;
-        cout << "\t\t\t numecnlsed" << findNumberOfEnclosedLoops(fl->get_loop_body()) <<endl;
 
         // Skip imperfectly nested loops and loops that are only singly nested
         if (!SageInterface::isCanonicalForLoop(fl)
