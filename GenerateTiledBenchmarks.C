@@ -55,12 +55,12 @@ void findEnclosingLoops(
 }
 
 /*
- * Get all read and write array reference contained in the scope of node
+ * Get all read and write array references contained in the scope of node
  */
 void getAllArrayRefs(
   SgNode* node,
-  vector<SgNode*> &arrWriteRefs,
-  vector<SgNode*> &arrReadRefs
+  vector<SgNode*> &arrReadRefs,
+  vector<SgNode*> &arrWriteRefs
 ) {
 
   // Collect all references in this loop nest
@@ -69,89 +69,138 @@ void getAllArrayRefs(
   vector<SgNode*> writeRefs;
   SageInterface::collectReadWriteRefs(loopScope, readRefs, writeRefs);
 
-  // get all array writes
-  for (int i = 0; i < writeRefs.size(); i++) {
-    SgPntrArrRefExp* writeArrRef = isSgPntrArrRefExp(writeRefs[i]);
-    if (writeArrRef)
-      continue;
-    arrWriteRefs.push_back(writeArrRef);
-  }
-
   // get all array reads
   for (int i = 0; i < readRefs.size(); i++) {
     SgPntrArrRefExp* readArrRef = isSgPntrArrRefExp(readRefs[i]);
-    if (readArrRef)
+    if (!readArrRef)
       continue;
     arrReadRefs.push_back(readArrRef);
   }
+
+  // get all array writes
+  for (int i = 0; i < writeRefs.size(); i++) {
+    SgPntrArrRefExp* writeArrRef = isSgPntrArrRefExp(writeRefs[i]);
+    if (!writeArrRef)
+      continue;
+    arrWriteRefs.push_back(writeArrRef);
+  }
 }
 
+/*
+ * Filter read and write references such that only those in the immediate body
+ * of the "dominating" loop are stored.
+ * - For a perfect loop nest, the dominating loop is the one whose body
+ *   contains the most number of array references
+ * - If we have more than one dominating loop (i.e. if reference counts are
+ *   equal), then we pick the loop that appear later based on line
+ *   number
+ * @ret dominating for loop's SgForStatement node
+ */
+SgForStatement* filterRefsNotInDominatingLoop(
+  vector<SgNode*> &arrReadRefs,
+  vector<SgNode*> &arrWriteRefs,
+  vector<SgNode*> &filteredReadRefs,
+  vector<SgNode*> &filteredWriteRefs
+) {
+
+  // find how many references are in the immediate body of each for loop
+  map<SgForStatement*, int> loopCounts;
+  for (SgNode* cur : arrReadRefs) {
+    SgStatement* refStmt = SageInterface::getEnclosingStatement(cur);
+    ROSE_ASSERT(refStmt);
+    SgForStatement* fl = isSgForStatement(
+      SageInterface::findEnclosingLoop(refStmt)
+    );
+    loopCounts[fl]++;
+  }
+  for (SgNode* cur : arrWriteRefs) {
+    SgStatement* refStmt = SageInterface::getEnclosingStatement(cur);
+    ROSE_ASSERT(refStmt);
+    SgForStatement* fl = isSgForStatement(
+      SageInterface::findEnclosingLoop(refStmt)
+    );
+    loopCounts[fl]++;
+  }
+
+  // get the dominating loop
+  int max = 0;
+  SgForStatement* dominatingLoop = NULL;
+  for (const auto &pair : loopCounts) {
+    if (pair.second >= max) {
+      dominatingLoop = pair.first;
+    }
+  }
+  ROSE_ASSERT(dominatingLoop); // this should not happen
+
+  // filter array references to containonly those in the dominating loop
+  for (SgNode *cur : arrReadRefs) {
+    SgStatement* refStmt = SageInterface::getEnclosingStatement(cur);
+    ROSE_ASSERT(refStmt);
+    SgForStatement* fl = isSgForStatement(
+      SageInterface::findEnclosingLoop(refStmt)
+    );
+    if (fl == dominatingLoop) {
+      filteredReadRefs.push_back(cur);
+    }
+  }
+  for (SgNode *cur : arrWriteRefs) {
+    SgStatement* refStmt = SageInterface::getEnclosingStatement(cur);
+    ROSE_ASSERT(refStmt);
+    SgForStatement* fl = isSgForStatement(
+      SageInterface::findEnclosingLoop(refStmt)
+    );
+    if (fl == dominatingLoop) {
+      filteredWriteRefs.push_back(cur);
+    }
+  }
+  return dominatingLoop;
+}
 
 /*
  * Collects features according the Yuki et al.'s implementation, however
  * their work only considers perfectly nested 3-dimensional loops with
  * two dimensional data with one tiling orientation (i.e. they perform
  * a square tile on the innermost two loops). Since we are tiling every
- * loop sequentially (hence not square), we introduce an additional distance
+ * loop sequentially (hence not square), we decide which loop "dominates"
+ * the loop tiling transformation. This is the loop that contains the most
+ * array references in its body. We introduce an additional distance
  * feature to be passed into the model, which signifies how far we are from
- * the array references in the innermost loop. Features:
+ * the array references in the dominating loop. This is require to
+ * differentiate between tiling different outer loops that have the same
+ * dominating loop. Features:
  * - [read/write] invariant references
  * - [read/write] prefetched references
  * - [read/write] non-prefetched references
- * - distance from innermost references
+ * - distance from dominating references
+ * @ret true if forLoop is a valid candidate for tiling, false otherwise
  */
-void collectLoopRefAndDist(SgForStatement* forLoop) {
+void collectLoopRefAndDist(
+  SgForStatement* forLoop,
+  map<string, int> &refFeatures
+) {
 
   // Collect all loops nested in forLoop, including forLoop
   Rose_STL_Container<SgNode*> loops = NodeQuery::querySubTree(
       forLoop->get_parent(), V_SgForStatement);
-
-  SgForStatement* innermostLoop = isSgForStatement(loops[loops.size()-1]);
-  ROSE_ASSERT(innermostLoop);
-
-  SageInterface::printAST(innermostLoop);
 
   // Collect all array references in this loop nest
   vector<SgNode*> arrReadRefs;
   vector<SgNode*> arrWriteRefs;
   getAllArrayRefs(forLoop, arrReadRefs, arrWriteRefs);
 
-/*
-  // Consider only array references in the innermost loop
-  // Note: for now we allow imperfectly nested loops
-  cout << "----writes:" << endl;
-  for (int i = 0; i < arrWriteRefs.size(); i++) {
-    SgPntrArrRefExp* writeVarRef = isSgPntrArrRefExp(arrWriteRefs[i]);
+  // Filter array references to those only contained in the dominating loop
+  vector<SgNode*> filteredReadRefs;
+  vector<SgNode*> filteredWriteRefs;
+  SgForStatement* dominatingLoop = filterRefsNotInDominatingLoop(
+      arrReadRefs, arrWriteRefs, filteredReadRefs, filteredWriteRefs);
+  ROSE_ASSERT(dominatingLoop);
 
-    if (writeVarRef)
-      continue;
-
-    SageInterface::printAST(writeVarRef);
+  for (SgNode* read : filteredReadRefs) {
+    
   }
-
-  cout << "----reads:" << endl;
-  for (int i = 0; i < arrReadRefs.size(); i++) {
-    SgPntrArrRefExp* readVarRef = isSgPntrArrRefExp(arrReadRefs[i]);
-
-    if (readVarRef)
-      continue;
-
-    SageInterface::printAST(readVarRef);
-  }
-*/
-/*
-  for (Rose_STL_Container<SgNode*>::iterator iter = loops.begin();
-       iter != loops.end(); iter++) {
-    SgNode *currentLoop = *iter;
-    SgForStatement *fl = isSgForStatement(currentLoop);
-    SageInterface::printAST(fl);
-  }
-*/
-
-//  vector<SgForStatement*> loops;
-//  findEnclosingLoops(forLoop, loops);
 
 }
+
 void generateTiledProg(int argc, char *argv[], string fileName,
                        string funcName, int lineNum, int colNum, int counter) {
 
@@ -249,17 +298,26 @@ int main(int argc, char *argv[]) {
         cout << "\t\t Found a for-loop to tile at: ";
         cout << flInfo->get_line() << endl;
 
+        // TODO: remove
+        cout << "\t\t\t canoncial: " << SageInterface::isCanonicalForLoop(fl) << endl;
+        cout << "\t\t\t numecnlsing" << findNumberOfEnclosingLoops(fl) <<endl;
+        cout << "\t\t\t numecnlsed" << findNumberOfEnclosedLoops(fl->get_loop_body()) <<endl;
+
         // Skip imperfectly nested loops and loops that are only singly nested
-        if (SageInterface::isCanonicalForLoop(fl)
-            && (findNumberOfEnclosingLoops(fl) > 1
-            ||  findNumberOfEnclosedLoops(fl->get_loop_body()) > 0)) {
-          //generateTiledProg(argc, argv, fileName, func->get_name().getString(),
-          //                  flInfo->get_line(), flInfo->get_col(), testcaseNum);
-          collectLoopRefAndDist(fl);
-          testcaseNum++;
-        } else {
+        if (!SageInterface::isCanonicalForLoop(fl)
+            || (findNumberOfEnclosingLoops(fl) <= 1
+                && findNumberOfEnclosedLoops(fl->get_loop_body()) == 0)) {
           cout << "\t\t\t Skipped malformed or single non-nested loop" << endl;
+          continue;
         }
+
+        // collect loop features
+        map<string, int> loopFeatures;
+        collectLoopRefAndDist(fl, loopFeatures);
+
+        //generateTiledProg(argc, argv, fileName, func->get_name().getString(),
+        //                  flInfo->get_line(), flInfo->get_col(), testcaseNum);
+        testcaseNum++;
 
       } // End for-loops loop
 
