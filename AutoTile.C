@@ -1,13 +1,6 @@
-/*
- * A boiler plate starter file for using ROSE
- *
- * Input: sequential C/C++ code
- * Output: same C/C++ code 
- *
- */
-
 #include "rose.h"
 #include <iostream>
+#include <string>
 
 using namespace std;
 
@@ -37,8 +30,10 @@ int findNumberOfEnclosedLoops(SgNode* node) {
   return loops.size();
 }
 
-// Performs a bottom up search of the AST, finding all enclosing
-// analyzable loops of the given node
+/*
+ * Performs a bottom up search of the AST, finding all enclosing
+ * analyzable loops of the given node
+ */
 void findEnclosingLoops(
   SgNode* node,
   vector<SgForStatement*> &loops
@@ -59,7 +54,9 @@ void findEnclosingLoops(
   }
 }
 
-// Get all read and write array reference contained in the scope of node
+/*
+ * Get all read and write array reference contained in the scope of node
+ */
 void getAllArrayRefs(
   SgNode* node,
   vector<SgNode*> &arrWriteRefs,
@@ -75,7 +72,7 @@ void getAllArrayRefs(
   // get all array writes
   for (int i = 0; i < writeRefs.size(); i++) {
     SgPntrArrRefExp* writeArrRef = isSgPntrArrRefExp(writeRefs[i]);
-    if (writeArrRef == NULL)
+    if (writeArrRef)
       continue;
     arrWriteRefs.push_back(writeArrRef);
   }
@@ -83,33 +80,50 @@ void getAllArrayRefs(
   // get all array reads
   for (int i = 0; i < readRefs.size(); i++) {
     SgPntrArrRefExp* readArrRef = isSgPntrArrRefExp(readRefs[i]);
-    if (readArrRef == NULL)
+    if (readArrRef)
       continue;
     arrReadRefs.push_back(readArrRef);
   }
 }
 
 
-void collectLoopRefInfo(SgForStatement* forLoop) {
+/*
+ * Collects features according the Yuki et al.'s implementation, however
+ * their work only considers perfectly nested 3-dimensional loops with
+ * two dimensional data with one tiling orientation (i.e. they perform
+ * a square tile on the innermost two loops). Since we are tiling every
+ * loop sequentially (hence not square), we introduce an additional distance
+ * feature to be passed into the model, which signifies how far we are from
+ * the array references in the innermost loop. Features:
+ * - [read/write] invariant references
+ * - [read/write] prefetched references
+ * - [read/write] non-prefetched references
+ * - distance from innermost references
+ */
+void collectLoopRefAndDist(SgForStatement* forLoop) {
 
-  // Collect all loop nested in forLoop, including forLoop
+  // Collect all loops nested in forLoop, including forLoop
   Rose_STL_Container<SgNode*> loops = NodeQuery::querySubTree(
       forLoop->get_parent(), V_SgForStatement);
 
   SgForStatement* innermostLoop = isSgForStatement(loops[loops.size()-1]);
   ROSE_ASSERT(innermostLoop);
 
+  SageInterface::printAST(innermostLoop);
+
   // Collect all array references in this loop nest
   vector<SgNode*> arrReadRefs;
   vector<SgNode*> arrWriteRefs;
   getAllArrayRefs(forLoop, arrReadRefs, arrWriteRefs);
 
-
+/*
+  // Consider only array references in the innermost loop
+  // Note: for now we allow imperfectly nested loops
   cout << "----writes:" << endl;
   for (int i = 0; i < arrWriteRefs.size(); i++) {
     SgPntrArrRefExp* writeVarRef = isSgPntrArrRefExp(arrWriteRefs[i]);
 
-    if (writeVarRef == NULL)
+    if (writeVarRef)
       continue;
 
     SageInterface::printAST(writeVarRef);
@@ -119,12 +133,12 @@ void collectLoopRefInfo(SgForStatement* forLoop) {
   for (int i = 0; i < arrReadRefs.size(); i++) {
     SgPntrArrRefExp* readVarRef = isSgPntrArrRefExp(arrReadRefs[i]);
 
-    if (readVarRef == NULL)
+    if (readVarRef)
       continue;
 
     SageInterface::printAST(readVarRef);
   }
-
+*/
 /*
   for (Rose_STL_Container<SgNode*>::iterator iter = loops.begin();
        iter != loops.end(); iter++) {
@@ -137,8 +151,48 @@ void collectLoopRefInfo(SgForStatement* forLoop) {
 //  vector<SgForStatement*> loops;
 //  findEnclosingLoops(forLoop, loops);
 
+}
+void generateTiledProg(int argc, char *argv[], string fileName,
+                       string funcName, int lineNum, int colNum, int counter) {
 
+  // Build a project
+  SgProject *project = frontend(argc,argv);
+  ROSE_ASSERT(project);
 
+  // Get the function with our target loop
+  SgFunctionDeclaration *func = SageInterface::findFunctionDeclaration(
+      project, funcName, NULL, true);
+  ROSE_ASSERT(func);
+  SgFunctionDefinition *defn = func->get_definition();
+  ROSE_ASSERT(defn);
+  Rose_STL_Container<SgNode*> loops = NodeQuery::querySubTree(
+      defn, V_SgForStatement);
+
+  // Find the target loop and tile it
+  for (Rose_STL_Container<SgNode*>::iterator iter = loops.begin();
+       iter != loops.end(); iter++) {
+    SgNode *currentLoop = *iter;
+    SgForStatement *fl = isSgForStatement(currentLoop);
+    if (fl->get_file_info()->get_col() == colNum
+        && fl->get_file_info()->get_line() == lineNum) {
+      SageInterface::loopTiling(fl, 1, 66);
+      break;
+    }
+  }
+
+  // unparse tiled program
+  backend(project);
+
+  // Hacky solution to generate multiple tiled programs for test case
+  string baseName = fileName.substr(fileName.find_last_of("/\\") + 1);
+  string::size_type const extLoc(baseName.find_last_of('.'));
+  string baseNameNoExt = baseName.substr(0, extLoc);
+  const string mvBinary = "mv a.out " + baseNameNoExt +
+                          to_string(counter) + ".out";
+  const string mvSrc = "mv rose_" + baseName + " " + baseNameNoExt +
+                       to_string(counter) + ".c";
+  system(mvBinary.c_str());
+  system(mvSrc.c_str());
 }
 
 int main(int argc, char *argv[]) {
@@ -184,28 +238,30 @@ int main(int argc, char *argv[]) {
           defn,V_SgForStatement);
       if (loops.size() == 0) continue;
 
-      // For each loop, collect loop features:
-      // - invariant, prefetched, non-prefetched references
+      // For each loop, tile the loop and unparse the program into a new file
       for (Rose_STL_Container<SgNode*>::iterator iter = loops.begin();
            iter != loops.end(); iter++) {
 
         SgNode *currentLoop = *iter;
         SgForStatement *fl = isSgForStatement(currentLoop);
 
+        Sg_File_Info* flInfo = fl->get_file_info();
         cout << "\t\t Found a for-loop to tile at: ";
-        cout << fl->get_file_info()->get_line() << endl;
+        cout << flInfo->get_line() << endl;
 
-        // Skip imperfectly nested loops and loops that are only singley nested
+        // Skip imperfectly nested loops and loops that are only singly nested
         if (SageInterface::isCanonicalForLoop(fl)
             && (findNumberOfEnclosingLoops(fl) > 1
             ||  findNumberOfEnclosedLoops(fl->get_loop_body()) > 0)) {
-          collectLoopRefInfo(fl);
+          //generateTiledProg(argc, argv, fileName, func->get_name().getString(),
+          //                  flInfo->get_line(), flInfo->get_col(), testcaseNum);
+          collectLoopRefAndDist(fl);
           testcaseNum++;
         } else {
-          cout << "\t\t\t Skipped single non-nested loop" << endl;
+          cout << "\t\t\t Skipped malformed or single non-nested loop" << endl;
         }
 
-      }// End for-loops loop
+      } // End for-loops loop
 
     } // End declarations loop
 
