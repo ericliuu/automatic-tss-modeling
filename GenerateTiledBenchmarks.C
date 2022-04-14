@@ -32,11 +32,8 @@ int findNumberOfEnclosedLoops(SgNode* node) {
 /*
  * Get all read and write array references contained in the scope of node
  */
-void getAllArrayRefs(
-  SgNode* node,
-  vector<SgNode*> &arrReadRefs,
-  vector<SgNode*> &arrWriteRefs
-) {
+void getAllArrayRefs(SgNode* node, vector<SgNode*> &arrReadRefs,
+                     vector<SgNode*> &arrWriteRefs) {
 
   // Collect all references in this loop nest
   SgStatement *loopScope = SageInterface::getScope(node);
@@ -75,8 +72,7 @@ SgForStatement* filterRefsNotInDominatingLoop(
   vector<SgNode*> &arrReadRefs,
   vector<SgNode*> &arrWriteRefs,
   vector<SgNode*> &filteredReadRefs,
-  vector<SgNode*> &filteredWriteRefs
-) {
+  vector<SgNode*> &filteredWriteRefs) {
 
   // find how many references are in the immediate body of each for loop
   map<SgForStatement*, int> loopCounts;
@@ -152,6 +148,15 @@ int loopDistance(SgForStatement* ancestor, SgForStatement* descendant) {
   return dist;
 }
 
+/*
+ * Print feature map to stdout
+ */
+void printFeatures(map<string, int> &features) {
+  cout << "\t\t\t Printing loop features:" << endl;
+  for (const auto &pair : features) {
+    cout << "\t\t\t\t " << pair.first << " " << pair.second << endl;
+  }
+}
 
 /*
  * Collects features according the Yuki et al.'s implementation, however
@@ -171,10 +176,8 @@ int loopDistance(SgForStatement* ancestor, SgForStatement* descendant) {
  * - distance from dominating references
  * @ret true if forLoop is a valid candidate for tiling, false otherwise
  */
-void collectLoopRefAndDist(
-  SgForStatement* forLoop,
-  map<string, int> &refFeatures
-) {
+void collectLoopRefAndDist(SgForStatement* forLoop,
+                           map<string, int> &refFeatures) {
 
   // Collect all loops nested in forLoop, including forLoop
   Rose_STL_Container<SgNode*> loops = NodeQuery::querySubTree(
@@ -196,6 +199,13 @@ void collectLoopRefAndDist(
       dominatingLoop);
 
   // Collect features
+  refFeatures["readInvariant"] = 0;
+  refFeatures["readPrefetched"] = 0;
+  refFeatures["readNonPrefetched"] = 0;
+  refFeatures["writeInvariant"] = 0;
+  refFeatures["writePrefetched"] = 0;
+  refFeatures["writeNonPrefetched"] = 0;
+
   for (SgNode* read : filteredReadRefs) {
     SgExpression* ref = isSgExpression(read);
     ROSE_ASSERT(ref);
@@ -230,11 +240,63 @@ void collectLoopRefAndDist(
       refFeatures["readInvariant"]++;
     }
   }
+
+  for (SgNode* write : filteredWriteRefs) {
+    SgExpression* ref = isSgExpression(write);
+    ROSE_ASSERT(ref);
+    SgExpression* nameExp = NULL;
+    vector<SgExpression*> *subscripts = new vector<SgExpression*>;
+    ROSE_ASSERT(SageInterface::isArrayReference(ref, &nameExp, &subscripts));
+
+    // We only consider 2D data
+    // TODO: Should 3+ dimensional data be filtered?
+    if (subscripts->size() != 2)
+      continue;
+
+    SgInitializedName* rowIdxName = SageInterface::convertRefToInitializedName(
+        (*subscripts)[0]);
+    SgInitializedName* colIdxName = SageInterface::convertRefToInitializedName(
+        (*subscripts)[1]);
+
+    // if columns of 2D data are indexed with dominating loop index,
+    // then the reference is prefetched
+    if (colIdxName == dominatingLoopIdx) {
+      refFeatures["writePrefetched"]++;
+    }
+
+    // if rows and not columns are indexed with dominating loop index,
+    // then the reference is non-prefetched
+    else if (rowIdxName == dominatingLoopIdx) {
+      refFeatures["writeNonPrefetched"]++;
+    }
+
+    // otherwise we have an invariant index
+    else {
+      refFeatures["writeInvariant"]++;
+    }
+  }
+
   refFeatures["distToDominatingLoop"] = loopDistance(forLoop, dominatingLoop);
 }
 
-void generateTiledProg(int argc, char *argv[], string fileName,
-                       string funcName, int lineNum, int colNum, int counter) {
+/*
+ * Generate a tiled program with the specified loop tiled to the specified
+ * size, then output both the tiled C code and binary. Finally concatenate
+ * the loop features of this test case to the specified .csv file
+ * @params
+ * - argc    : needed to build a rose project
+ * - argv    : needed to build a rose project
+ * - fileName: name of the file which contains the loop we are tiling
+ * - funcName: name of the function which contains the loop we are tiling
+ * - lineNum : line number of the loop we are tiling
+ * - colNum  : column number of the loop we are tiling
+ * - tileSize: size of tiling to apply to the target loop
+ * - features: loop features that are outputted to a specified .csv file
+ * - csvName : name of the csv file
+ */
+void generateTiledProg(int argc, char *argv[], string fileName, string funcName,
+                       int lineNum, int colNum, int tileSize,
+                       map<string, int> &features, string csvName) {
 
   // Build a project
   SgProject *project = frontend(argc,argv);
@@ -256,22 +318,25 @@ void generateTiledProg(int argc, char *argv[], string fileName,
     SgForStatement *fl = isSgForStatement(currentLoop);
     if (fl->get_file_info()->get_col() == colNum
         && fl->get_file_info()->get_line() == lineNum) {
-      SageInterface::loopTiling(fl, 1, 66);
+      SageInterface::loopTiling(fl, 1, tileSize);
       break;
     }
   }
 
-  // unparse tiled program
+  // Unparse tiled program
   backend(project);
 
   // Hacky solution to generate multiple tiled programs for test case
   string baseName = fileName.substr(fileName.find_last_of("/\\") + 1);
   string::size_type const extLoc(baseName.find_last_of('.'));
   string baseNameNoExt = baseName.substr(0, extLoc);
-  const string mvBinary = "mv a.out " + baseNameNoExt +
-                          to_string(counter) + ".out";
-  const string mvSrc = "mv rose_" + baseName + " " + baseNameNoExt +
-                       to_string(counter) + ".c";
+
+  // name outputs as {filename}_{lineNum}_{colNum}_{tileSize}
+  string uniqueName = baseNameNoExt + "_" + to_string(lineNum) +
+                      "_" + to_string(colNum) + "_" + to_string(tileSize);
+
+  const string mvBinary = "mv a.out " + uniqueName + ".out";
+  const string mvSrc = "mv rose_" + baseName + " " + uniqueName + ".c";
   system(mvBinary.c_str());
   system(mvSrc.c_str());
 }
@@ -284,7 +349,6 @@ int main(int argc, char *argv[]) {
 
   // For each source file in the project
   SgFilePtrList & ptr_list = project->get_fileList();
-  int testcaseNum = 0;
 
   for (SgFilePtrList::iterator iter = ptr_list.begin(); iter != ptr_list.end();
        iter++) {
@@ -341,10 +405,11 @@ int main(int argc, char *argv[]) {
         // collect loop features
         map<string, int> loopFeatures;
         collectLoopRefAndDist(fl, loopFeatures);
+        printFeatures(loopFeatures);
 
-        //generateTiledProg(argc, argv, fileName, func->get_name().getString(),
-        //                  flInfo->get_line(), flInfo->get_col(), testcaseNum);
-        testcaseNum++;
+        generateTiledProg(argc, argv, fileName, func->get_name().getString(),
+                          flInfo->get_line(), flInfo->get_col(), 66,
+                          loopFeatures, "temp.csv");
 
       } // End for-loops loop
 
