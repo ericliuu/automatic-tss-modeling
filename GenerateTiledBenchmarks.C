@@ -3,6 +3,8 @@
 #include <fstream>
 #include <string>
 
+// #define DEBUG 1
+
 using namespace std;
 
 int findNumberOfEnclosingLoops(SgNode* node) {
@@ -406,7 +408,9 @@ int main(int argc, char *argv[]) {
     SgDeclarationStatementPtrList& declList = root->get_declarations();
     string fileName = sfile->getFileName();
 
+    #ifdef DEBUG
     cout << "Found a file: " << fileName << endl;
+    #endif
 
     // For each function body in the scope
     for (SgDeclarationStatementPtrList::iterator p = declList.begin();
@@ -422,7 +426,9 @@ int main(int argc, char *argv[]) {
         continue;
       }
 
+      #ifdef DEBUG
       cout << "\t Found a function" << endl;
+      #endif
 
       // Collect all loops
       Rose_STL_Container<SgNode*> loops = NodeQuery::querySubTree(
@@ -437,24 +443,32 @@ int main(int argc, char *argv[]) {
         SgForStatement *fl = isSgForStatement(currentLoop);
 
         Sg_File_Info* flInfo = fl->get_file_info();
+        #ifdef DEBUG
         cout << "\t\t Found a for-loop to tile at: ";
         cout << flInfo->get_line() << endl;
+        #endif
 
         // Skip imperfectly nested loops and loops that are only singly nested
         if (!SageInterface::isCanonicalForLoop(fl)
             || (findNumberOfEnclosingLoops(fl) <= 1
                 && findNumberOfEnclosedLoops(fl->get_loop_body()) == 0)) {
+          #ifdef DEBUG
           cout << "\t\t\t Skipped malformed or single non-nested loop" << endl;
+          #endif
           continue;
         }
 
         // Collect loop features
         map<string, int> loopFeatures;
         bool isCandidate = collectLoopRefAndDist(fl, loopFeatures);
+        #ifdef DEBUG
         printFeatures(loopFeatures);
+        #endif
 
         if (!isCandidate) {
+          #ifdef DEBUG
           cout << "\t\t\t Loop doesn't have enough 2D array references" << endl;
+          #endif
           continue;
         }
 
@@ -473,5 +487,7 @@ int main(int argc, char *argv[]) {
 
   } // End files loop
 
+  #ifdef DEBUG
   cout << "Done ...\n";
+  #endif
 }
