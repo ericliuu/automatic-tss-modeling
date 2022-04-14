@@ -1,5 +1,6 @@
 #include "rose.h"
 #include <iostream>
+#include <fstream>
 #include <string>
 
 using namespace std;
@@ -239,6 +240,8 @@ void collectLoopRefAndDist(SgForStatement* forLoop,
     else {
       refFeatures["readInvariant"]++;
     }
+
+    delete subscripts;
   }
 
   for (SgNode* write : filteredWriteRefs) {
@@ -274,6 +277,8 @@ void collectLoopRefAndDist(SgForStatement* forLoop,
     else {
       refFeatures["writeInvariant"]++;
     }
+
+    delete subscripts;
   }
 
   refFeatures["distToDominatingLoop"] = loopDistance(forLoop, dominatingLoop);
@@ -331,7 +336,7 @@ void generateTiledProg(int argc, char *argv[], string fileName, string funcName,
   string::size_type const extLoc(baseName.find_last_of('.'));
   string baseNameNoExt = baseName.substr(0, extLoc);
 
-  // name outputs as {filename}_{lineNum}_{colNum}_{tileSize}
+  // Name outputs as {filename}_{lineNum}_{colNum}_{tileSize}
   string uniqueName = baseNameNoExt + "_" + to_string(lineNum) +
                       "_" + to_string(colNum) + "_" + to_string(tileSize);
 
@@ -339,6 +344,32 @@ void generateTiledProg(int argc, char *argv[], string fileName, string funcName,
   const string mvSrc = "mv rose_" + baseName + " " + uniqueName + ".c";
   system(mvBinary.c_str());
   system(mvSrc.c_str());
+
+  // Append loop features to the input csv file
+  ifstream fileExists(csvName);
+  ofstream csvFile;
+
+  // Add csv header line if the csv file does not yet exist
+  if (!fileExists.is_open()) {
+    fileExists.close();
+    csvFile.open(csvName);
+    csvFile << "uniqueFilename,rootFilename,tileSize,";
+    csvFile << "readInvariant,readPrefetched,readNonPrefetched,";
+    csvFile << "writeInvariant,writePrefetched,writeNonPrefetched,";
+    csvFile << "distToDominatingLoop\n";
+    csvFile.close();
+  }
+
+  csvFile.open (csvName, ios::out | ios::app);
+  csvFile << uniqueName << "," << baseNameNoExt << "," << tileSize << ",";
+  csvFile << features["readInvariant"] << ",";
+  csvFile << features["readPrefetched"] << ",";
+  csvFile << features["readNonPrefetched"] << ",";
+  csvFile << features["writeInvariant"] << ",";
+  csvFile << features["writePrefetched"] << ",";
+  csvFile << features["writeNonPrefetched"] << ",";
+  csvFile << features["distToDominatingLoop"] << "\n";
+
 }
 
 int main(int argc, char *argv[]) {
@@ -402,14 +433,19 @@ int main(int argc, char *argv[]) {
           continue;
         }
 
-        // collect loop features
+        // Collect loop features
         map<string, int> loopFeatures;
         collectLoopRefAndDist(fl, loopFeatures);
         printFeatures(loopFeatures);
 
-        generateTiledProg(argc, argv, fileName, func->get_name().getString(),
-                          flInfo->get_line(), flInfo->get_col(), 66,
-                          loopFeatures, "temp.csv");
+        // Generate tiled programs for tile sizes from 1 to 512
+        const int tileSizes[10] = {1, 4, 8, 16, 32, 64, 128, 256};
+
+        for (const int tileSize : tileSizes) {
+          generateTiledProg(argc, argv, fileName, func->get_name().getString(),
+                            flInfo->get_line(), flInfo->get_col(), tileSize,
+                            loopFeatures, "features.csv");
+        }
 
       } // End for-loops loop
 
