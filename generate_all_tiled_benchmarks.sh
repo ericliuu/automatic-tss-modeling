@@ -6,12 +6,11 @@ fi
 
 cd tiled_polybench
  
-# Declare an array of string with type
 declare -a StringArray=(
-"../benchmarks/polybench-3.1/linear-algebra/kernels/symm/symm.c"
+#"../benchmarks/polybench-3.1/linear-algebra/kernels/symm/symm.c"
 "../benchmarks/polybench-3.1/linear-algebra/kernels/cholesky/cholesky.c"
-"../benchmarks/polybench-3.1/linear-algebra/kernels/gemm/gemm.c"
-"../benchmarks/polybench-3.1/linear-algebra/kernels/syr2k/syr2k.c"
+#"../benchmarks/polybench-3.1/linear-algebra/kernels/gemm/gemm.c"
+#"../benchmarks/polybench-3.1/linear-algebra/kernels/syr2k/syr2k.c"
 "../benchmarks/polybench-3.1/linear-algebra/kernels/3mm/3mm.c"
 "../benchmarks/polybench-3.1/linear-algebra/kernels/atax/atax.c"
 "../benchmarks/polybench-3.1/linear-algebra/kernels/syrk/syrk.c"
@@ -40,10 +39,9 @@ declare -a StringArray=(
 "../benchmarks/polybench-3.1/datamining/covariance/covariance.c"
 )
 
-# Iterate the string array using for loop
 for path in ${StringArray[@]}; do
   echo "Starting generation for $path"
   SECONDS=0
-  ../GenerateTiledBenchmarks -I../benchmarks/polybench-3.1/utilities ../benchmarks/polybench-3.1/utilities/polybench.c $path
+  ../GenerateTiledBenchmarks -I../benchmarks/polybench-3.1/utilities ../benchmarks/polybench-3.1/utilities/polybench.c $path -lm
   echo "- finished in $SECONDS seconds"
 done
