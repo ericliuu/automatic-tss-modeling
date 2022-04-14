@@ -177,7 +177,7 @@ void printFeatures(map<string, int> &features) {
  * - distance from dominating references
  * @ret true if forLoop is a valid candidate for tiling, false otherwise
  */
-void collectLoopRefAndDist(SgForStatement* forLoop,
+bool collectLoopRefAndDist(SgForStatement* forLoop,
                            map<string, int> &refFeatures) {
 
   // Collect all loops nested in forLoop, including forLoop
@@ -206,6 +206,8 @@ void collectLoopRefAndDist(SgForStatement* forLoop,
   refFeatures["writeInvariant"] = 0;
   refFeatures["writePrefetched"] = 0;
   refFeatures["writeNonPrefetched"] = 0;
+  int num2DRef = 0;
+  int num2PlusDRef = 0;
 
   for (SgNode* read : filteredReadRefs) {
     SgExpression* ref = isSgExpression(read);
@@ -214,10 +216,14 @@ void collectLoopRefAndDist(SgForStatement* forLoop,
     vector<SgExpression*> *subscripts = new vector<SgExpression*>;
     ROSE_ASSERT(SageInterface::isArrayReference(ref, &nameExp, &subscripts));
 
+    if (subscripts->size() > 2)
+      num2PlusDRef++;
+
     // We only consider 2D data
-    // TODO: Should 3+ dimensional data be filtered?
     if (subscripts->size() != 2)
       continue;
+
+    num2DRef++;
 
     SgInitializedName* rowIdxName = SageInterface::convertRefToInitializedName(
         (*subscripts)[0]);
@@ -251,10 +257,14 @@ void collectLoopRefAndDist(SgForStatement* forLoop,
     vector<SgExpression*> *subscripts = new vector<SgExpression*>;
     ROSE_ASSERT(SageInterface::isArrayReference(ref, &nameExp, &subscripts));
 
+    if (subscripts->size() > 2)
+      num2PlusDRef++;
+
     // We only consider 2D data
-    // TODO: Should 3+ dimensional data be filtered?
     if (subscripts->size() != 2)
       continue;
+
+    num2DRef++;
 
     SgInitializedName* rowIdxName = SageInterface::convertRefToInitializedName(
         (*subscripts)[0]);
@@ -282,6 +292,11 @@ void collectLoopRefAndDist(SgForStatement* forLoop,
   }
 
   refFeatures["distToDominatingLoop"] = loopDistance(forLoop, dominatingLoop);
+
+  // skip this loop if it contains no 2-dimensional references OR
+  // if it has more 3+ dimensional references that 2-dimensional references
+
+  return num2DRef > 0 && num2DRef > num2PlusDRef;
 }
 
 /*
@@ -435,8 +450,13 @@ int main(int argc, char *argv[]) {
 
         // Collect loop features
         map<string, int> loopFeatures;
-        collectLoopRefAndDist(fl, loopFeatures);
+        bool isCandidate = collectLoopRefAndDist(fl, loopFeatures);
         printFeatures(loopFeatures);
+
+        if (!isCandidate) {
+          cout << "\t\t\t Loop doesn't have enough 2D array references" << endl;
+          continue;
+        }
 
         // Generate tiled programs for tile sizes from 1 to 512
         const int tileSizes[10] = {1, 4, 8, 16, 32, 64, 128, 256};
