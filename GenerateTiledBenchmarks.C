@@ -222,10 +222,20 @@ bool collectLoopRefAndDist(SgForStatement* forLoop,
       num2PlusDRef++;
 
     // We only consider 2D data
-    if (subscripts->size() != 2)
+    if (subscripts->size() != 2) {
+      delete subscripts;
       continue;
+    }
 
     num2DRef++;
+
+    // Skip references with constant subscripts
+    SgIntVal* testIdx0 = isSgIntVal((*subscripts)[0]);
+    SgIntVal* testIdx1 = isSgIntVal((*subscripts)[1]);
+    if (testIdx0 || testIdx1) {
+      delete subscripts;
+      continue;
+    }
 
     SgInitializedName* rowIdxName = SageInterface::convertRefToInitializedName(
         (*subscripts)[0]);
@@ -263,10 +273,20 @@ bool collectLoopRefAndDist(SgForStatement* forLoop,
       num2PlusDRef++;
 
     // We only consider 2D data
-    if (subscripts->size() != 2)
+    if (subscripts->size() != 2) {
+      delete subscripts;
       continue;
+    }
 
     num2DRef++;
+
+    // Skip references with constant subscripts
+    SgIntVal* testIdx0 = isSgIntVal((*subscripts)[0]);
+    SgIntVal* testIdx1 = isSgIntVal((*subscripts)[1]);
+    if (testIdx0 || testIdx1) {
+      delete subscripts;
+      continue;
+    }
 
     SgInitializedName* rowIdxName = SageInterface::convertRefToInitializedName(
         (*subscripts)[0]);
