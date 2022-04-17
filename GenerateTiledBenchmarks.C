@@ -492,8 +492,8 @@ int main(int argc, char *argv[]) {
           continue;
         }
 
-        // Generate tiled programs for tile sizes from 1 to 512
-        const int tileSizes[10] = {1, 4, 8, 16, 32, 64, 128, 256};
+        // Generate tiled programs for tile sizes from 1 to 256
+        const int tileSizes[8] = {1, 4, 8, 16, 32, 64, 128, 256};
 
         for (const int tileSize : tileSizes) {
           generateTiledProg(argc, argv, fileName, func->get_name().getString(),
