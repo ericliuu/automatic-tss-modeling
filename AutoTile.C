@@ -520,8 +520,6 @@ int main(int argc, char *argv[]) {
 
         int tileSize = getTileSizePrediction(loopFeatures, MODEL_PATH, OUTPUT_PATH);
 
-        cout << tileSize;
-
         generateTiledProg(argc, argv, fileName, func->get_name().getString(),
                           flInfo->get_line(), flInfo->get_col(), tileSize,
                           loopFeatures, "features.csv");
